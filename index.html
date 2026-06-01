@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Змейка 500x500</title>
+  <style>
+    body {
+      margin: 0; display: flex; justify-content: center; align-items: center;
+      height: 100vh; background: #1a1a1a; font-family: system-ui, sans-serif; flex-direction: column;
+    }
+    #ui { color: #fff; margin: 12px 0; font-size: 18px; display: flex; gap: 24px; align-items: center; }
+    #status { color: #aaa; font-size: 14px; margin-bottom: 8px; min-height: 20px; }
+    canvas { background: #000; border: 2px solid #333; box-shadow: 0 0 15px rgba(0,255,100,0.1); }
+    .hint { font-size: 12px; color: #666; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <span>Счёт: <b id="score">0</b></span>
+    <span>Рекорд: <b id="highscore">0</b></span>
+  </div>
+  <div id="status">Нажми ENTER для старта</div>
+  <canvas id="game" width="500" height="500"></canvas>
+  <div class="hint">R = сброс рекорда | SPACE = пауза | ← ↑ ↓ → = управление</div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const WIDTH = 500, HEIGHT = 500, CELL = 20;
+    
+    let stepTime = 100;
+    let snake, food, score, dir = 'RIGHT', nextDir = 'RIGHT';
+    let isRunning = false, isPaused = false;
+    let lastTime = 0, accumulator = 0, rafId = null;
+    let audioCtx = null;
+
+    function initAudio() {
+      if (!audioCtx) {
+        try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){}
+      }
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    // 🔊 Звук поедания (короткий "блип")
+    function playEatSound() {
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.04);
+      gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.06);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.06);
+    }
+
+    // 🔊 Звук рекорда (восходящий мажорный аккорд)
+    function playHighScoreSound() {
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+      osc.frequency.setValueAtTime(659.25, audioCtx.currentTime + 0.1); // E5
+      osc.frequency.setValueAtTime(783.99, audioCtx.currentTime + 0.2); // G5
+      gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.35);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.35);
+    }
+
+    // 🔊 Звук проигрыша (нисходящий минорный аккорд, "грустный")
+    function playGameOverSound() {
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.type = 'triangle';
+      const now = audioCtx.currentTime;
+      // C4 → A3 → E3 → A2 (минорная последовательность с замедлением)
+      osc.frequency.setValueAtTime(261.63, now);
+      osc.frequency.setValueAtTime(220.00, now + 0.15);
+      osc.frequency.setValueAtTime(164.81, now + 0.35);
+      osc.frequency.exponentialRampToValueAtTime(110.00, now + 0.65);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+      osc.start(now);
+      osc.stop(now + 0.7);
+    }
+
+    function resetHighScore() {
+      localStorage.removeItem('snakeHighScore');
+      document.getElementById('highscore').textContent = '0';
+      document.getElementById('status').textContent = 'Рекорд сброшен! Нажмите ENTER';
+      setTimeout(() => {
+        if (!isRunning) document.getElementById('status').textContent = 'Нажми ENTER для старта';
+      }, 1500);
+    }
+
+    function init() {
+      if (rafId) cancelAnimationFrame(rafId);
+      snake = [{x:240,y:240}, {x:220,y:240}, {x:200,y:240}];
+      food = spawnFood(); score = 0; dir = 'RIGHT'; nextDir = 'RIGHT';
+      stepTime = 100;
+      isRunning = false; isPaused = false;
+      lastTime = 0; accumulator = 0;
+      document.getElementById('score').textContent = 0;
+      document.getElementById('status').textContent = 'Нажми ENTER для старта';
+      const hs = localStorage.getItem('snakeHighScore');
+      if (hs) document.getElementById('highscore').textContent = hs;
+      draw();
+    }
+
+    function spawnFood() {
+      let x, y;
+      do {
+        x = Math.floor(Math.random() * (WIDTH / CELL)) * CELL;
+        y = Math.floor(Math.random() * (HEIGHT / CELL)) * CELL;
+      } while (snake.some(p => p.x === x && p.y === y));
+      return {x, y};
+    }
+
+    function update() {
+      const opp = {'UP':'DOWN','DOWN':'UP','LEFT':'RIGHT','RIGHT':'LEFT'};
+      if (nextDir !== opp[dir]) dir = nextDir;
+
+      let head = {x: snake[0].x, y: snake[0].y};
+      switch(dir) {
+        case 'UP': head.y -= CELL; break; case 'DOWN': head.y += CELL; break;
+        case 'LEFT': head.x -= CELL; break; case 'RIGHT': head.x += CELL; break;
+      }
+      if (head.x < 0 || head.x >= WIDTH || head.y < 0 || head.y >= HEIGHT || 
+          snake.some(p => p.x === head.x && p.y === head.y)) {
+        gameOver(); return;
+      }
+      snake.unshift(head);
+      if (head.x === food.x && head.y === food.y) {
+        score++; 
+        document.getElementById('score').textContent = score;
+        playEatSound();
+        food = spawnFood();
+        if (score > 0 && score % 5 === 0) stepTime = Math.max(40, stepTime - 5);
+      } else {
+        snake.pop();
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0,0,WIDTH,HEIGHT);
+      if (isPaused) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0,0,WIDTH,HEIGHT);
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 28px system-ui';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('ПАУЗА', WIDTH/2, HEIGHT/2);
+      } else {
+        ctx.fillStyle = 'lime'; snake.forEach(p => ctx.fillRect(p.x, p.y, CELL-1, CELL-1));
+        ctx.fillStyle = 'red'; ctx.fillRect(food.x, food.y, CELL-1, CELL-1);
+      }
+    }
+
+    function gameLoop(timestamp) {
+      if (!lastTime) lastTime = timestamp;
+      const delta = timestamp - lastTime;
+      lastTime = timestamp;
+      accumulator += delta;
+      if (accumulator > stepTime * 2) accumulator = stepTime;
+
+      while (accumulator >= stepTime) {
+        if (isRunning && !isPaused) update();
+        accumulator -= stepTime;
+      }
+      draw();
+      rafId = requestAnimationFrame(gameLoop);
+    }
+
+    function startLoop() {
+      if (rafId) cancelAnimationFrame(rafId);
+      lastTime = 0; accumulator = 0;
+      rafId = requestAnimationFrame(gameLoop);
+    }
+
+    function gameOver() {
+      isRunning = false;
+      const hs = localStorage.getItem('snakeHighScore') || 0;
+      
+      if (score > hs) {
+        localStorage.setItem('snakeHighScore', score);
+        document.getElementById('highscore').textContent = score + ' 🎉';
+        playHighScoreSound(); // 🔊 ТОЛЬКО победный звук
+      } else {
+        playGameOverSound();  // 🔊 ТОЛЬКО если рекорд НЕ побит
+      }
+      
+      document.getElementById('status').textContent = 'Game Over! Нажми ENTER для рестарта';
+      draw();
+    }
+
+    function handleKey(e) {
+      initAudio();
+      const k = e.key;
+      if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(k)) e.preventDefault();
+
+      if (e.code === 'KeyR') {
+        resetHighScore();
+        return;
+      }
+
+      if (k === 'Enter') {
+        init(); isRunning = true;
+        document.getElementById('status').textContent = 'Играем... (SPACE - пауза)';
+        startLoop(); return;
+      }
+      if (k === ' ' && isRunning) {
+        isPaused = !isPaused;
+        document.getElementById('status').textContent = isPaused ? 'Пауза. Пробел - продолжить' : 'Играем... (SPACE - пауза)';
+        draw(); return;
+      }
+
+      if (!isRunning || isPaused) return;
+      const moves = {'ArrowUp':'UP','ArrowDown':'DOWN','ArrowLeft':'LEFT','ArrowRight':'RIGHT'};
+      if (moves[k]) nextDir = moves[k];
+    }
+
+    document.addEventListener('keydown', handleKey);
+    init();
+  </script>
+</body>
+</html>
