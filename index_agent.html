@@ -14,7 +14,6 @@
     canvas { background: #000; border: 2px solid #333; box-shadow: 0 0 15px rgba(0,255,100,0.1); }
     .hint { font-size: 12px; color: #666; margin-top: 4px; }
   </style>
-<link rel="icon" href="data:,">
 </head>
 <body>
   <div id="ui">
@@ -35,7 +34,6 @@
     let isRunning = false, isPaused = false;
     let lastTime = 0, accumulator = 0, rafId = null;
     let audioCtx = null;
-    let fps = 0, fpsCount = 0, fpsTimer = 0;
 
     function initAudio() {
       if (!audioCtx) {
@@ -174,23 +172,6 @@
         accumulator -= stepTime;
       }
       draw();
-
-      // FPS counter
-      fpsCount++;
-      const now = Date.now();
-      if (now - fpsTimer > 1000) {
-        fps = fpsCount;
-        fpsCount = 0;
-        fpsTimer = now;
-      }
-
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-      ctx.fillRect(0, HEIGHT - 30, 100, 30);
-      ctx.font = '14px monospace';
-      ctx.textAlign = 'left';
-      ctx.fillStyle = '#fff';
-      ctx.fillText(`FPS: ${fps}`, 10, HEIGHT - 15);
-
       rafId = requestAnimationFrame(gameLoop);
     }
 
@@ -245,5 +226,33 @@
     document.addEventListener('keydown', handleKey);
     init();
   </script>
+
+javascript
+<script>
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  let isPaused = false;
+  let animationFrameId;
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'p') {
+      isPaused = !isPaused;
+      if (isPaused) {
+        cancelAnimationFrame(animationFrameId);
+        console.log('ПАУЗА');
+      } else {
+        animate();
+      }
+    }
+  });
+
+  function animate(timestamp) {
+    animationFrameId = requestAnimationFrame(animate);
+    // Здесь можно добавить код для анимации
+  }
+
+  audioCtx.resume().then(() => {
+    animate();
+  });
+</script>
 </body>
 </html>
